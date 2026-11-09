@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    maven {
+        url = 'https://repo.runelite.net'
+    }
+    mavenCentral()
+    mavenLocal()
+}
+
+def runeLiteVersion = 'latest.release'
+
+dependencies {
+    compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+    testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+}
+
+group = 'com.hcimguide'
+version = "2.0"
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Test).configureEach {
+    systemProperty 'file.encoding', 'UTF-8'
+}
+
+// Launch a RuneLite dev client with HCIM Atlas and the existing Guide Overlay.
+tasks.register('runAtlas', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.hcimguide.HcimGuidePluginTest'
+    jvmArgs '-ea'
+}

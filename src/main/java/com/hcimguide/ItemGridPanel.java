@@ -1,0 +1,425 @@
+package com.hcimguide;
+
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.GradientPaint;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GridLayout;
+import java.awt.TexturePaint;
+import java.awt.geom.Rectangle2D;
+import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.List;
+import javax.swing.BorderFactory;
+import javax.swing.ImageIcon;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.ui.FontManager;
+import net.runelite.client.util.AsyncBufferedImage;
+
+/**
+ * Item icons for a step's requirements, drawn on an OSRS-inventory-style
+ * panel: the classic stone-brown background with a beveled edge, four
+ * columns wide like the real inventory. The background is PAINTED (plain
+ * gradients and lines in the game's palette), not a bundled game texture,
+ * so no copyrighted asset ships with the plugin. Slots get a green border
+ * when the item is currently carried, red when missing.
+ */
+public class ItemGridPanel extends JPanel
+{
+	/**
+	 * Four columns, like the in-game inventory. 4 x 36px slots + gaps +
+	 * border = ~158px, well inside the side panel's ~200px usable row width
+	 * even on indented steps. Item sprites are 36x32 natively, so they fit
+	 * without scaling; anything wider is scaled down on load.
+	 */
+	private static final int COLUMNS = 4;
+	private static final int SLOT = 36;
+	private static final int SLOT_H = 32;
+	/** Stack-count yellow, matching the client's own quantity text. */
+	private static final Color QTY_LABEL = new Color(255, 255, 0);
+	private static final Color PRESENT = new Color(0, 200, 120, 170);
+	private static final Color MISSING = new Color(190, 60, 60, 170);
+
+	// fallback palette while the real sprite loads (painted, not a game asset)
+	private static final Color INV_BG = new Color(62, 53, 41);
+	private static final Color INV_BG_LIGHT = new Color(73, 64, 52);
+	private static final Color INV_EDGE_DARK = new Color(43, 36, 27);
+	private static final Color INV_EDGE_LIGHT = new Color(94, 84, 66);
+
+	/**
+	 * The ACTUAL in-game inventory stone background, pulled from the player's
+	 * own game files via SpriteManager at runtime (never bundled). While it
+	 * loads - or if the cache read ever fails - the painted fallback shows.
+	 */
+	private static volatile BufferedImage inventoryBackground;
+
+	static void setInventoryBackground(BufferedImage img)
+	{
+		inventoryBackground = img;
+	}
+
+	/** Release the one shared background image when the plugin is disabled. */
+	static void clearInventoryBackground()
+	{
+		inventoryBackground = null;
+	}
+
+	private final List<Slot> slots = new ArrayList<>();
+
+	/**
+	 * Set when the panel generation is discarded (episode switch / re-import),
+	 * so late-arriving async icon loads can't resurrect a dead component tree.
+	 */
+	private volatile boolean disposed;
+
+	private static class Slot
+	{
+		final ItemReq req;
+		final JLabel label;
+		boolean present;
+		/** Last resolved item id for this slot (-1 = no matching item). */
+		int itemId = -1;
+
+		Slot(ItemReq req, JLabel label)
+		{
+			this.req = req;
+			this.label = label;
+		}
+	}
+
+	/** When false, no colored have-it borders - a clean wiki-style inventory. */
+	private final boolean presenceBorders;
+
+	ItemGridPanel(List<ItemReq> items, boolean presenceBorders)
+	{
+		this.presenceBorders = presenceBorders;
+		int rows = (items.size() + COLUMNS - 1) / COLUMNS;
+		setLayout(new GridLayout(rows, COLUMNS, 2, 2));
+		setOpaque(false); // background painted in paintComponent
+		setBorder(BorderFactory.createEmptyBorder(4, 4, 5, 4));
+		// the step row wraps this panel in a left-aligned FlowLayout, which
+		// respects preferred size - so the grid keeps its natural width
+
+		for (ItemReq req : items)
+		{
+			JLabel label = new JLabel();
+			label.setHorizontalAlignment(SwingConstants.CENTER);
+			label.setVerticalAlignment(SwingConstants.CENTER);
+			label.setPreferredSize(new Dimension(SLOT, SLOT_H));
+			label.setOpaque(false); // items sit directly on the inventory brown
+			String tooltip = req.toString();
+			if (req.getCompletionQuantity() < req.getQuantity())
+			{
+				tooltip += " (ready at " + req.getCompletionQuantity() + ")";
+			}
+			label.setToolTipText(tooltip);
+			label.setFont(FontManager.getRunescapeSmallFont());
+			// text fallback until (or unless) an icon resolves
+			label.setText(abbreviate(req.getName()));
+			label.setForeground(new Color(214, 195, 152)); // parchment on brown
+
+			Slot slot = new Slot(req, label);
+			slots.add(slot);
+			setSlotBorder(slot, false);
+			add(label);
+		}
+
+		// pad the last row so slots keep their size
+		int pad = rows * COLUMNS - items.size();
+		for (int i = 0; i < pad; i++)
+		{
+			JLabel filler = new JLabel();
+			filler.setPreferredSize(new Dimension(SLOT, SLOT_H));
+			add(filler);
+		}
+	}
+
+	/**
+	 * Resolve icons via the item manager. Call from any thread; icon updates
+	 * hop to the EDT when each image loads. Slots are also REORDERED so
+	 * anything with a picture - real items AND sprite-backed concepts like
+	 * "Combat Gear" - comes first, and only textual chips ("2 Food") sink to
+	 * the end of the grid; stable order within each group, idempotent across
+	 * re-resolution passes.
+	 *
+	 * @param ids one resolved item id per slot, -1 for unresolved
+	 */
+	void applyIcons(ItemManager itemManager, List<ItemReq> reqs, int[] ids)
+	{
+		applyIcons(itemManager, null, reqs, ids);
+	}
+
+	/**
+	 * @param spriteManager supplies icons for sprite-backed slots ("Combat
+	 *     Gear"), which have no item id. May be null, in which case those
+	 *     slots stay empty.
+	 */
+	void applyIcons(ItemManager itemManager, net.runelite.client.game.SpriteManager spriteManager,
+		List<ItemReq> reqs, int[] ids)
+	{
+		// pair ids to slots by REQUIREMENT IDENTITY, not position: a reorder
+		// scheduled by an earlier pass may land between the caller's resolve()
+		// and this call, and positional pairing would then swap icons. The
+		// same ItemReq objects live in both the slots and the caller's list,
+		// so identity mapping is exact.
+		final java.util.IdentityHashMap<ItemReq, Integer> byReq = new java.util.IdentityHashMap<>();
+		for (int i = 0; i < reqs.size() && i < ids.length; i++)
+		{
+			byReq.put(reqs.get(i), ids[i]);
+		}
+		final List<Slot> snapshot;
+		List<Slot> reordered = null;
+		synchronized (slots)
+		{
+			snapshot = new ArrayList<>(slots);
+			for (Slot s : snapshot)
+			{
+				Integer id = byReq.get(s.req);
+				if (id != null)
+				{
+					s.itemId = id;
+				}
+			}
+			List<Slot> resolved = new ArrayList<>();
+			List<Slot> unresolved = new ArrayList<>();
+			for (Slot s : snapshot)
+			{
+				(s.itemId > 0 || ItemIconResolver.isSpriteId(s.itemId) ? resolved : unresolved).add(s);
+			}
+			if (!resolved.isEmpty() && !unresolved.isEmpty())
+			{
+				List<Slot> candidate = new ArrayList<>(resolved);
+				candidate.addAll(unresolved);
+				// skip the EDT rebuild when already partitioned (idempotent)
+				if (!candidate.equals(snapshot))
+				{
+					reordered = candidate;
+				}
+			}
+		}
+		if (reordered != null)
+		{
+			final List<Slot> ordered = reordered;
+			SwingUtilities.invokeLater(() ->
+			{
+				if (disposed)
+				{
+					return;
+				}
+				synchronized (slots)
+				{
+					if (ordered.size() != slots.size())
+					{
+						return; // a newer generation replaced the slots
+					}
+					slots.clear();
+					slots.addAll(ordered);
+				}
+				removeAll();
+				for (Slot s : ordered)
+				{
+					add(s.label);
+				}
+				// pad the last row so slots keep their size
+				int rows = (ordered.size() + COLUMNS - 1) / COLUMNS;
+				int pad = rows * COLUMNS - ordered.size();
+				for (int i = 0; i < pad; i++)
+				{
+					JLabel filler = new JLabel();
+					filler.setPreferredSize(new Dimension(SLOT, SLOT_H));
+					add(filler);
+				}
+				revalidate();
+				repaint();
+			});
+		}
+
+		for (Slot slot : snapshot)
+		{
+			if (slot.itemId <= 0 && !ItemIconResolver.isSpriteId(slot.itemId))
+			{
+				continue;
+			}
+			int qty = slot.req.getQuantity();
+			// open quantities ("all", "100+") get a drawn label instead of the
+			// sprite's baked-in stack number, which can only render digits
+			boolean openQty = slot.req.hasQuantityLabel();
+			if (ItemIconResolver.isSpriteId(slot.itemId))
+			{
+				setConceptBorder(slot);
+				applySpriteSlot(spriteManager, slot);
+				continue;
+			}
+			AsyncBufferedImage img = itemManager.getImage(slot.itemId, qty, !openQty && qty > 1);
+			final Slot finalSlot = slot;
+			Runnable apply = () ->
+			{
+				if (disposed)
+				{
+					return;
+				}
+				if (openQty)
+				{
+					finalSlot.label.setText(finalSlot.req.getQuantityLabel());
+					finalSlot.label.setForeground(QTY_LABEL);
+					finalSlot.label.setFont(finalSlot.label.getFont().deriveFont(10f));
+					finalSlot.label.setHorizontalTextPosition(SwingConstants.LEFT);
+					finalSlot.label.setVerticalTextPosition(SwingConstants.TOP);
+				}
+				else
+				{
+					finalSlot.label.setText(null);
+				}
+				// item sprites are 36x32 natively - exactly the slot size, so
+				// they render crisp and unscaled; only oversized images shrink
+				if (img.getWidth() > SLOT)
+				{
+					finalSlot.label.setIcon(new ImageIcon(img.getScaledInstance(
+						SLOT, -1, java.awt.Image.SCALE_SMOOTH)));
+				}
+				else
+				{
+					finalSlot.label.setIcon(new ImageIcon(img));
+				}
+				finalSlot.label.revalidate();
+				finalSlot.label.repaint();
+			};
+			img.onLoaded(() -> SwingUtilities.invokeLater(apply));
+			SwingUtilities.invokeLater(apply);
+		}
+	}
+
+
+	/** Fills a sprite-backed slot once the client sprite loads. */
+	private void applySpriteSlot(net.runelite.client.game.SpriteManager spriteManager, Slot slot)
+	{
+		if (spriteManager == null)
+		{
+			return;
+		}
+		final Slot target = slot;
+		spriteManager.getSpriteAsync(ItemIconResolver.spriteIdOf(slot.itemId), 0, img ->
+			SwingUtilities.invokeLater(() ->
+			{
+				if (disposed || img == null)
+				{
+					return;
+				}
+				target.label.setText(null);
+				target.label.setIcon(new ImageIcon(img));
+				target.label.revalidate();
+				target.label.repaint();
+			}));
+	}
+
+	/** Update presence borders from the current inventory snapshot (O(1) per slot). */
+	void updatePresence(InventorySnapshot snapshot)
+	{
+		final List<Slot> copy;
+		synchronized (slots)
+		{
+			copy = new ArrayList<>(slots);
+		}
+		for (Slot slot : copy)
+		{
+			// a concept slot ("Combat Gear") names no concrete item, so a
+			// presence check would always fail and paint a permanent red border
+			if (ConceptItems.isConcept(slot.req.getName()))
+			{
+				continue;
+			}
+			boolean present = snapshot.countOf(slot.req) >= slot.req.getCompletionQuantity();
+			if (present != slot.present)
+			{
+				slot.present = present;
+				setSlotBorder(slot, present);
+			}
+		}
+	}
+
+	/**
+	 * Background: the REAL inventory stone texture from the game's own files
+	 * (tiled at native pixel density, like the wiki's inventory images).
+	 * Falls back to a painted approximation until the sprite loads.
+	 */
+	@Override
+	protected void paintComponent(Graphics g)
+	{
+		Graphics2D g2 = (Graphics2D) g.create();
+		try
+		{
+			int w = getWidth();
+			int h = getHeight();
+			BufferedImage bg = inventoryBackground;
+			if (bg != null && bg.getWidth() > 0 && bg.getHeight() > 0)
+			{
+				g2.setPaint(new TexturePaint(bg,
+					new Rectangle2D.Float(0, 0, bg.getWidth(), bg.getHeight())));
+				g2.fillRect(0, 0, w, h);
+				g2.setColor(INV_EDGE_DARK);
+				g2.drawRect(0, 0, w - 1, h - 1);
+			}
+			else
+			{
+				g2.setPaint(new GradientPaint(0, 0, INV_BG_LIGHT, 0, h, INV_BG));
+				g2.fillRect(0, 0, w, h);
+				g2.setColor(INV_EDGE_DARK);
+				g2.drawRect(0, 0, w - 1, h - 1);
+				g2.setColor(INV_EDGE_LIGHT);
+				g2.drawLine(1, 1, w - 2, 1);
+				g2.drawLine(1, 1, 1, h - 2);
+			}
+		}
+		finally
+		{
+			g2.dispose();
+		}
+		super.paintComponent(g);
+	}
+
+	/** Detach this grid from future async icon callbacks. */
+	void dispose()
+	{
+		disposed = true;
+	}
+
+	private void setConceptBorder(Slot slot)
+	{
+		slot.present = true;
+		slot.label.setBorder(BorderFactory.createEmptyBorder(1, 1, 1, 1));
+	}
+
+	private void setSlotBorder(Slot slot, boolean present)
+	{
+		if (!presenceBorders)
+		{
+			slot.label.setBorder(BorderFactory.createEmptyBorder(1, 1, 1, 1));
+			return;
+		}
+		slot.label.setBorder(BorderFactory.createLineBorder(present ? PRESENT : MISSING, 1));
+	}
+
+	private static String abbreviate(String name)
+	{
+		String s = name.trim();
+		return s.length() <= 6 ? s : s.substring(0, 5) + "…";
+	}
+
+	List<ItemReq> getItems()
+	{
+		synchronized (slots)
+		{
+			List<ItemReq> out = new ArrayList<>();
+			for (Slot s : slots)
+			{
+				out.add(s.req);
+			}
+			return out;
+		}
+	}
+}
