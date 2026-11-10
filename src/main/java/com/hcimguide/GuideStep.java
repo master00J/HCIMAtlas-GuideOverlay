@@ -15,6 +15,7 @@ public class GuideStep
 	 * (users' saved progress) are unaffected by link changes.
 	 */
 	private String videoUrl;
+	private AuthoredLocation authoredLocation;
 
 	public GuideStep(String key, String text, int depth, String bankId)
 	{
@@ -58,5 +59,20 @@ public class GuideStep
 	void setVideoUrl(String videoUrl)
 	{
 		this.videoUrl = videoUrl;
+	}
+
+	/**
+	 * Tile the guide's author attached to this step ("location" in the guide
+	 * JSON), or null. Like the video link it is metadata only: never part of
+	 * the step text, so step keys and saved progress are unaffected.
+	 */
+	public AuthoredLocation getAuthoredLocation()
+	{
+		return authoredLocation;
+	}
+
+	void setAuthoredLocation(AuthoredLocation authoredLocation)
+	{
+		this.authoredLocation = authoredLocation;
 	}
 }

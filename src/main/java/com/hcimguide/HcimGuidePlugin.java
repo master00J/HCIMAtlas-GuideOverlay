@@ -1985,6 +1985,9 @@ public class HcimGuidePlugin extends Plugin
 		}
 		Map<String, StepLocationPlan> built = new HashMap<>(StepLocationPlanner.buildPlans(
 			guide, targets, placeDirectory, transportResolver, locationStore::lookup));
+		// Tiles written into the guide file beat the text-based guess. They are
+		// part of the base plans, so clearing a manual pin falls back to them.
+		AuthoredLocation.apply(guide, built);
 		baseLocationPlans = Collections.unmodifiableMap(new HashMap<>(built));
 		// custom overrides: fetched in ONE store parse - per-step getPlan()
 		// would deserialize the whole stored blob once per step

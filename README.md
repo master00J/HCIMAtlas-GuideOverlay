@@ -10,6 +10,22 @@ Used together with [master00J/Atlas-HCIM](https://github.com/master00J/Atlas-HCI
 
 ---
 
+## Tegel per stap in het guide-bestand
+
+Een stap in een JSON-guide mag een `location` hebben. De plugin toont dan die tegel in plaats van zijn gok op basis van de tekst:
+
+```json
+{ "content": [{"text": "Talk to Cassius at the pond south of the windmill and start The Ides of Milk"}],
+  "location": {"x": 3171, "y": 3277, "plane": 0, "label": "Cassius", "radius": 5} }
+```
+
+- `x`, `y` verplicht; `plane` (0–3, standaard 0), `label` en `radius` (1–20, standaard 5) optioneel. Een ongeldige tegel wordt genegeerd.
+- De tegel hoort niet bij de stap-tekst: de voortgang die je al afvinkte blijft kloppen.
+- Een pin die je zelf zet wint; wis je die, dan geldt weer de tegel uit de guide.
+- Aankomen vinkt alleen een echte reisstap af, net als bij pins.
+
+De route in [Atlas-HCIM](https://github.com/master00J/Atlas-HCIM) vult dit veld automatisch, met tegels uit Quest Helper voor NPC's die de spawn-database niet of verkeerd kent. De pin-import via het klembord is met deze versie niet meer nodig.
+
 # Guide Overlay
 
 **Current release: 2.0**

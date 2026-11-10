@@ -17,6 +17,7 @@ import com.google.gson.JsonParser;
  *     { "title": "Chapter 1: ...", "sections": [
  *         { "title": "1.1: ...", "steps": [
  *             { "content": [{"text": "..."}], "nestedContent": [...],
+ *               "location": {"x": 3171, "y": 3277, "plane": 0, "label": "..."},
  *               "metadata": {"items_needed": "...", "total_time": "..."} } ] } ] } ] }
  * </pre>
  *
@@ -271,9 +272,21 @@ public class JsonGuideParser
 			// keys shift and miss migration - the user re-ticks those steps.
 			if (!raw.isEmpty())
 			{
+				int firstAdded = bank.getSteps().size();
 				stepCount = addParagraph(guide, bank, raw, legacyRaw, itemsSuffix, 0,
 					videoLinks(optArray(step, "content")),
 					occByText, occByOld, occByLegacy, stepCount);
+				// An authored tile belongs to the whole paragraph: when the
+				// paragraph is split into one step per sentence, every part
+				// happens at that place.
+				AuthoredLocation authored = AuthoredLocation.parse(step);
+				if (authored != null)
+				{
+					for (int i = firstAdded; i < bank.getSteps().size(); i++)
+					{
+						bank.getSteps().get(i).setAuthoredLocation(authored);
+					}
+				}
 			}
 
 			JsonArray nested = optArray(step, "nestedContent");
