@@ -73,6 +73,13 @@ final class StepLocationHint
 			LocationSource.USER_PIN, LocationConfidence.MANUAL, radius, 2);
 	}
 
+	/** A tile the guide's author wrote into the guide file (see {@link AuthoredLocation}). */
+	static StepLocationHint authored(String identity, String label, WorldPoint point, int radius)
+	{
+		return new StepLocationHint(label, point, false, true, false, identity,
+			LocationSource.AUTHORED_WAYPOINT, LocationConfidence.MANUAL, radius, 2);
+	}
+
 	String getLabel()
 	{
 		return label;
