@@ -690,6 +690,18 @@ public interface HcimGuideConfig extends Config
 		return true;
 	}
 
+	@ConfigItem(
+		keyName = "hudCompactMode",
+		name = "Compact gameplay HUD",
+		description = "Show only the current bank and a short preview of the active step. Hides extra item/next-step boxes and attached buttons to keep the game visible. The side panel still shows all details. Turn off for the old full HUD.",
+		position = 1,
+		section = hudSection
+	)
+	default boolean hudCompactMode()
+	{
+		return true;
+	}
+
 	@Range(min = 1, max = 5)
 	@ConfigItem(
 		keyName = "hudMaxSteps",
