@@ -20,7 +20,7 @@ public class HudOverlayCompactTest
 		String preview = HudOverlay.compactPreview(original, 76);
 		assertTrue(preview.endsWith("..."));
 		assertTrue(preview.length() <= 76);
-		assertEquals(original, original); // the source step remains unchanged
+		assertTrue(original.length() > preview.length()); // full instruction remains in the guide
 	}
 
 	@Test
