@@ -132,6 +132,15 @@ public class HudOverlay extends OverlayPanel
 		panelComponent.setPreferredSize(new Dimension(config.hudWidth(), 0));
 		panelComponent.setBackgroundColor(backgroundColor());
 
+		// Compact is the default on-screen mode: a short step preview only.
+		// All details, item images and safety notes remain in the side panel.
+		// In particular do not display the stacked next-step and item boxes
+		// that can obscure the middle of the game viewport.
+		if (config.hudCompactMode())
+		{
+			return renderCompact(graphics, bank);
+		}
+
 		int[] progress = plugin.progressOf(bank.getSteps());
 		panelComponent.getChildren().add(TitleComponent.builder()
 			.text(bank.getTitle() + "  (" + progress[0] + "/" + progress[1] + ")")
@@ -256,6 +265,74 @@ public class HudOverlay extends OverlayPanel
 			clearArrowRects();
 		}
 		return new Dimension(d.width, y);
+	}
+
+	/**
+	 * A deliberately small in-game view for active gameplay.
+	 * Keeps the full route and interactive controls in the side panel;
+	 * the HUD is not allowed to expand into an item grid or next-step stack.
+	 */
+	private Dimension renderCompact(Graphics2D graphics, GuideBank bank)
+	{
+		panelComponent.getChildren().clear();
+		panelComponent.setPreferredSize(new Dimension(Math.min(config.hudWidth(), 220), 0));
+		panelComponent.setBackgroundColor(backgroundColor());
+
+		int[] p = plugin.progressOf(bank.getSteps());
+		panelComponent.getChildren().add(TitleComponent.builder()
+			.text(bank.getTitle() + "  " + p[0] + "/" + p[1])
+			.color(TITLE_COLOR)
+			.build());
+
+		GuideStep next = null;
+		for (GuideStep step : bank.getSteps())
+		{
+			if (!plugin.isStepDone(step.getKey()))
+			{
+				next = step;
+				break;
+			}
+		}
+
+		if (next != null)
+		{
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("> " + compactPreview(next.getText(), 76))
+				.leftColor(semanticStepColor(next, NEXT_STEP_COLOR))
+				.build());
+		}
+		else
+		{
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("Section complete")
+				.leftColor(TRIP_READY_COLOR)
+				.build());
+		}
+
+		// No off-screen hit areas for attached buttons: context menu, the
+		// RuneLite side panel and optional floating arrows remain available.
+		clearArrowRects();
+		return super.render(graphics);
+	}
+
+	/** Keep a short preview on screen without changing the real step text. */
+	static String compactPreview(String raw, int limit)
+	{
+		if (raw == null)
+		{
+			return "";
+		}
+		String clean = raw.replaceAll("\\s+", " ").trim();
+		if (limit <= 4 || clean.length() <= limit)
+		{
+			return clean;
+		}
+		int cut = clean.lastIndexOf(' ', limit - 3);
+		if (cut < limit / 2)
+		{
+			cut = limit - 3;
+		}
+		return clean.substring(0, cut).trim() + "...";
 	}
 
 	private Color semanticStepColor(GuideStep step, Color fallback)
